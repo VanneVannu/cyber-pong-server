@@ -16,6 +16,18 @@ app.post('/crear-sala', (req, res) => {
     res.json({ status: "SALA_CREADA" });
 });
 
+// NUEVA RUTA DE EMERGENCIA: Vacía el historial de la sala tras un gol para evitar el efecto fantasma
+app.post('/limpiar-sala', (req, res) => {
+    const { salaId } = req.body;
+    if (salas[salaId]) {
+        salas[salaId].datos = []; // Borramos todos los paquetes rezagados de golpe
+        console.log(`Cola de mensajes limpiada para la sala: ${salaId}`);
+        res.json({ status: "SALA_LIMPIA" });
+    } else {
+        res.status(404).json({ error: "SALA_NO_ENCONTRADA" });
+    }
+});
+
 // Ruta para enviar mensajes del chat, saques o coordenadas
 app.post('/enviar', (req, res) => {
     const { salaId, emisor, contenido } = req.body;
