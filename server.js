@@ -1,58 +1,52 @@
 const express = require('express');
-const http = require('http');
-const { Server } = require('socket.io');
 const cors = require('cors');
-
 const app = express();
-app.use(cors()); // Permite conexiones seguras cruzadas
 
-const server = http.createServer(app);
-const io = new Server(server, {
-    cors: {
-        origin: "*", // Permite que tu frontend de Render se conecte sin bloqueos
-        methods: ["GET", "POST"]
+app.use(cors());
+app.use(express.json());
+
+// Base de datos temporal en memoria del servidor
+const salas = {};
+
+// Ruta para crear una sala con el código amarillo
+app.post('/crear-sala', (req, res) => {
+    const { salaId } = req.body;
+    salas[salaId] = { datos: [], timestamp: Date.now() };
+    console.log(`Sala creada en la nube: ${salaId}`);
+    res.json({ status: "SALA_CREADA" });
+});
+
+// Ruta para enviar mensajes del chat, saques o coordenadas
+app.post('/enviar', (req, res) => {
+    const { salaId, emisor, contenido } = req.body;
+    if (salas[salaId]) {
+        // Guardamos el paquete en la sala con una marca de tiempo única
+        salas[salaId].datos.push({ emisor, contenido, stamp: Date.now() });
+        // Limpieza: mantenemos sólo los últimos 15 paquetes para evitar saturar la memoria
+        if (salas[salaId].datos.length > 15) salas[salaId].datos.shift();
+        res.json({ status: "ENVIADO" });
+    } else {
+        res.status(404).json({ error: "SALA_NO_ENCONTRADA" });
     }
 });
 
-// Almacén de las salas activas en memoria del servidor
-const salas = {};
-
-io.on('connection', (socket) => {
-    console.log(`Usuario conectado a la red arcade: ${socket.id}`);
-
-    // Un jugador crea una sala con su código amarillo
-    socket.on('crear_sala', (salaId) => {
-        socket.join(salaId);
-        salas[salaId] = { host: socket.id, invitado: null };
-        console.log(`Sala creada: ${salaId} por Host: ${socket.id}`);
-    });
-
-    // El segundo jugador introduce el código y se conecta
-    socket.on('unirse_sala', (salaId) => {
-        if (salas[salaId]) {
-            socket.join(salaId);
-            salas[salaId].invitado = socket.id;
-            console.log(`Invitado: ${socket.id} se unió a la sala: ${salaId}`);
-            
-            // Avisamos al creador que el rival ya entró
-            io.to(salas[salaId].host).emit('rival_conectado');
-        } else {
-            socket.emit('error_sala', 'SALA NO ENCONTRADA');
-        }
-    });
-
-    // Retransmisor universal de paquetes (Chat, Saques, Coordenadas)
-    socket.on('enviar_paquete', ({ salaId, datos }) => {
-        // Envía el mensaje a todos los de la sala excepto a quien lo emitió
-        socket.to(salaId).emit('recibir_paquete', datos);
-    });
-
-    socket.on('disconnect', () => {
-        console.log(`Usuario desconectado: ${socket.id}`);
-    });
+// Ruta de consulta continua (Polleo) para leer lo que envió el rival
+app.get('/escuchar/:salaId', (req, res) => {
+    const { salaId } = req.params;
+    if (salas[salaId]) {
+        res.json({ datos: salas[salaId].datos });
+    } else {
+        res.status(404).json({ error: "SALA_NO_ENCONTRADA" });
+    }
 });
+
+// Limpieza automática global cada 2 horas para salas abandonadas
+setInterval(() => {
+    const ahora = Date.now();
+    for (const id in salas) {
+        if (ahora - salas[id].timestamp > 7200000) delete salas[id];
+    }
+}, 3600000);
 
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => {
-    console.log(`Servidor de red Cyber Pong corriendo en puerto ${PORT}`);
-});
+app.listen(PORT, () => console.log(`Cerebro HTTP operando en puerto ${PORT}`));
