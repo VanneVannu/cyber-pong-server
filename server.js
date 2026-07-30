@@ -1,64 +1,63 @@
 const express = require('express');
+const http = require('http');
+const { Server } = require('socket.io');
 const cors = require('cors');
+
 const app = express();
+app.use(cors()); // Desactiva bloqueos de seguridad del navegador
 
-app.use(cors());
-app.use(express.json());
+const server = http.createServer(app);
+const io = new Server(server, {
+    cors: {
+        origin: "*", // Permite que tu frontend de Render se conecte sin restricciones CORS
+        methods: ["GET", "POST"]
+    }
+});
 
-// Base de datos temporal en memoria del servidor
+// Diccionario en memoria del servidor para registrar las arenas activas
 const salas = {};
 
-// Ruta para crear una sala con el código amarillo
-app.post('/crear-sala', (req, res) => {
-    const { salaId } = req.body;
-    salas[salaId] = { datos: [], timestamp: Date.now() };
-    console.log(`Sala creada en la nube: ${salaId}`);
-    res.json({ status: "SALA_CREADA" });
-});
+io.on('connection', (socket) => {
+    console.log(`Dispositivo enlazado a la red arcade: ${socket.id}`);
 
-// NUEVA RUTA DE EMERGENCIA: Vacía el historial de la sala tras un gol para evitar el efecto fantasma
-app.post('/limpiar-sala', (req, res) => {
-    const { salaId } = req.body;
-    if (salas[salaId]) {
-        salas[salaId].datos = []; // Borramos todos los paquetes rezagados de golpe
-        console.log(`Cola de mensajes limpiada para la sala: ${salaId}`);
-        res.json({ status: "SALA_LIMPIA" });
-    } else {
-        res.status(404).json({ error: "SALA_NO_ENCONTRADA" });
-    }
-});
+    // El Host crea la sala de vectores con su ID amarillo
+    socket.on('crear_sala', (salaId) => {
+        socket.join(salaId);
+        salas[salaId] = { host: socket.id, invitado: null };
+        console.log(`Sala configurada: ${salaId} -> Host: ${socket.id}`);
+    });
 
-// Ruta para enviar mensajes del chat, saques o coordenadas
-app.post('/enviar', (req, res) => {
-    const { salaId, emisor, contenido } = req.body;
-    if (salas[salaId]) {
-        // Guardamos el paquete en la sala con una marca de tiempo única
-        salas[salaId].datos.push({ emisor, contenido, stamp: Date.now() });
-        // Limpieza: mantenemos sólo los últimos 15 paquetes para evitar saturar la memoria
-        if (salas[salaId].datos.length > 15) salas[salaId].datos.shift();
-        res.json({ status: "ENVIADO" });
-    } else {
-        res.status(404).json({ error: "SALA_NO_ENCONTRADA" });
-    }
-});
+    // El Invitado introduce el código y se conecta de golpe
+    socket.on('unirse_sala', (salaId) => {
+        if (salas[salaId]) {
+            socket.join(salaId);
+            salas[salaId].invitado = socket.id;
+            console.log(`Invitado: ${socket.id} acoplado a la sala: ${salaId}`);
+            
+            // Avisamos de forma instantánea al Host que el rival ya está en la arena
+            io.to(salas[salaId].host).emit('rival_conectado');
+        } else {
+            socket.emit('error_sala', 'ROOM PROTOCOL: NOT FOUND OR EXPIRED');
+        }
+    });
 
-// Ruta de consulta continua (Polleo) para leer lo que envió el rival
-app.get('/escuchar/:salaId', (req, res) => {
-    const { salaId } = req.params;
-    if (salas[salaId]) {
-        res.json({ datos: salas[salaId].datos });
-    } else {
-        res.status(404).json({ error: "SALA_NO_ENCONTRADA" });
-    }
-});
+    // Retransmisor síncrono instantáneo (Chat, Saques, Coordenadas de paletas)
+    socket.on('enviar_paquete', ({ salaId, datos }) => {
+        // Redirige el paquete al rival en la misma sala en menos de 1ms
+        socket.to(salaId).emit('recibir_paquete', datos);
+    });
 
-// Limpieza automática global cada 2 horas para salas abandonadas
-setInterval(() => {
-    const ahora = Date.now();
-    for (const id in salas) {
-        if (ahora - salas[id].timestamp > 7200000) delete salas[id];
-    }
-}, 3600000);
+    // Evento de emergencia si se limpia la cola tras un gol
+    socket.on('limpiar_sala', (salaId) => {
+        socket.to(salaId).emit('recibir_paquete', { tipo: 'sync_reset_pelota' });
+    });
+
+    socket.on('disconnect', () => {
+        console.log(`Dispositivo desconectado de la red: ${socket.id}`);
+    });
+});
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Cerebro HTTP operando en puerto ${PORT}`));
+server.listen(PORT, () => {
+    console.log(`Cerebro WebSocket operando con Socket.io en puerto ${PORT}`);
+});
