@@ -1,7 +1,7 @@
 {
   "name": "cyber-pong-server",
   "version": "1.0.0",
-  "description": "Servidor WebSocket de Alta Frecuencia para Cyber Pong Neon",
+  "description": "Servidor WebSocket Nativo de Grado Industrial para Cyber Pong Neon",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
@@ -9,6 +9,6 @@
   "dependencies": {
     "cors": "^2.8.5",
     "express": "^4.19.2",
-    "socket.io": "^4.7.5"
+    "ws": "^8.18.0"
   }
 }
