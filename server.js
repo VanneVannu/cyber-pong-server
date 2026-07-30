@@ -1,63 +1,76 @@
 const express = require('express');
-const http = require('http');
-const { Server } = require('socket.io');
 const cors = require('cors');
+const { WebSocketServer } = require('ws');
 
 const app = express();
-app.use(cors()); // Desactiva bloqueos de seguridad del navegador
+app.use(cors());
 
-const server = http.createServer(app);
-const io = new Server(server, {
-    cors: {
-        origin: "*", // Permite que tu frontend de Render se conecte sin restricciones CORS
-        methods: ["GET", "POST"]
-    }
+// Creamos el servidor HTTP básico de Express
+const PORT = process.env.PORT || 3000;
+const server = app.listen(PORT, () => {
+    console.log(`Servidor HTTP y WebSocket corriendo en el puerto ${PORT}`);
 });
 
-// Diccionario en memoria del servidor para registrar las arenas activas
+// Acoplamos el servidor de WebSockets puros directamente sobre el puerto HTTP
+const wss = new WebSocketServer({ server });
+
+// Diccionario en memoria para agrupar las conexiones por sala
 const salas = {};
 
-io.on('connection', (socket) => {
-    console.log(`Dispositivo enlazado a la red arcade: ${socket.id}`);
+wss.on('connection', (ws) => {
+    console.log('[NET]: Nueva terminal acoplada al canal de vectores.');
 
-    // El Host crea la sala de vectores con su ID amarillo
-    socket.on('crear_sala', (salaId) => {
-        socket.join(salaId);
-        salas[salaId] = { host: socket.id, invitado: null };
-        console.log(`Sala configurada: ${salaId} -> Host: ${socket.id}`);
-    });
+    ws.on('message', (message) => {
+        try {
+            const paquete = JSON.parse(message);
+            const { accion, salaId, contenido } = paquete;
 
-    // El Invitado introduce el código y se conecta de golpe
-    socket.on('unirse_sala', (salaId) => {
-        if (salas[salaId]) {
-            socket.join(salaId);
-            salas[salaId].invitado = socket.id;
-            console.log(`Invitado: ${socket.id} acoplado a la sala: ${salaId}`);
-            
-            // Avisamos de forma instantánea al Host que el rival ya está en la arena
-            io.to(salas[salaId].host).emit('rival_conectado');
-        } else {
-            socket.emit('error_sala', 'ROOM PROTOCOL: NOT FOUND OR EXPIRED');
+            // 1. PROTOCOLO DE CREACIÓN DE SALA (HOST)
+            if (accion === 'crear_sala') {
+                ws.salaId = salaId;
+                ws.esHost = true;
+                salas[salaId] = { host: ws, invitado: null };
+                console.log(`[ROOM]: Sala reservada: ${salaId}`);
+            }
+
+            // 2. PROTOCOLO DE CONEXIÓN DE RIVAL (INVITADO)
+            if (accion === 'unirse_sala') {
+                if (salas[salaId]) {
+                    ws.salaId = salaId;
+                    ws.esHost = false;
+                    salas[salaId].invitado = ws;
+                    console.log(`[ROOM]: Invitado acoplado con éxito a la sala: ${salaId}`);
+                    
+                    // Le avisamos inmediatamente al Host de forma interna que el rival ya entró
+                    if (salas[salaId].host && salas[salaId].host.readyState === 1) {
+                        salas[salaId].host.send(JSON.stringify({ tipo: 'rival_conectado' }));
+                    }
+                } else {
+                    ws.send(JSON.stringify({ tipo: 'error_sala', mensaje: 'SALA_NO_ENCONTRADA' }));
+                }
+            }
+
+            // 3. RETRANSMISOR UNIVERSAL ULTRA VELOZ (Chat, Goles, Sincronización)
+            if (accion === 'transmitir') {
+                const sala = salas[ws.salaId];
+                if (sala) {
+                    // Si eres el host, se lo mandas al invitado; si eres invitado, se lo mandas al host
+                    const destino = ws.esHost ? sala.invitado : sala.host;
+                    if (destino && destino.readyState === 1) {
+                        destino.send(JSON.stringify(contenido));
+                    }
+                }
+            }
+
+        } catch (e) {
+            console.error("Error al procesar JSON aéreo:", e);
         }
     });
 
-    // Retransmisor síncrono instantáneo (Chat, Saques, Coordenadas de paletas)
-    socket.on('enviar_paquete', ({ salaId, datos }) => {
-        // Redirige el paquete al rival en la misma sala en menos de 1ms
-        socket.to(salaId).emit('recibir_paquete', datos);
+    ws.on('close', () => {
+        if (ws.salaId && salas[ws.salaId]) {
+            console.log(`[NET]: Terminal desconectada de la sala: ${ws.salaId}`);
+            delete salas[ws.salaId]; // Limpieza de memoria instantánea
+        }
     });
-
-    // Evento de emergencia si se limpia la cola tras un gol
-    socket.on('limpiar_sala', (salaId) => {
-        socket.to(salaId).emit('recibir_paquete', { tipo: 'sync_reset_pelota' });
-    });
-
-    socket.on('disconnect', () => {
-        console.log(`Dispositivo desconectado de la red: ${socket.id}`);
-    });
-});
-
-const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => {
-    console.log(`Cerebro WebSocket operando con Socket.io en puerto ${PORT}`);
 });
